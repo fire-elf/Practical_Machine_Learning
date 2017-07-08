@@ -1,0 +1,114 @@
+---
+title: "Fitness move assessment - Practical Machine Learning"
+author: "Jennifer Holtzman"
+date: "July 9, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Executive Summary 
+
+The goal of the assignment is to use fitness tracker data to predict whether weight lifting exercises were done well, i.e., using correct form. Separate training and test data sets were provided as described: http://groupware.les.inf.puc-rio.br/har
+
+Exploration of the data led to the inclusion of 46 of the 160 variables. Columns were removed due to them containing no data, being indices and timestamps not relevant for prediction, or being highly correlated with other variables. A subset of 30 % of the remaining data set was used to fit a random forest model with 5-fold cross-validation. The calculated accuracy was very high (97 %), but so was the kappa statistic (96 %), so it can not be determined whether the classifier model performed any better than would be expected. Out-of-bounds error of the model was calculated at 1.83 %.
+
+Applying the model to the testing data (20 samples) resulted in the following predictions: B A B A A E D B A A B C B A E E A B B B
+All were correct in the quiz.
+
+## Loading Data and Installing Packages
+
+The task is to create a prediction model based on data collected with a fitness tracker in order to determine whether an exercise, barbell lifts was done correctly. The form of the exercise is captured by the variable "classe", which assumes one of 5 classes, A-E. Two data sets are provided, a training set (19622 observations over 160 variables, including the one to be predicted), and a testing set (20 observations over the same 160 variables)
+
+```{r load_data_libs, echo = TRUE}
+setwd("C:/Users/Jenny/Documents/COURSERA/8 - Machine Learning")
+training <- read.csv("pml-training.csv", na.strings=c("","NA"))
+testing <- read.csv("pml-testing.csv", na.strings=c("","NA"))
+
+set.seed(12547)
+
+library(caret)
+
+```
+## Brief discussion of data exploration
+
+1. Checked for empty and NA values. Within the training set, there are 406 complete cases out of 19622 rows of observations. Do not want to throw out useful data. Instead, determine which columns (variables) are mostly empty or NA, i.e. contain no data, and can probably safely be omitted for purposes of prediction. Of 160 columns, 60 remain.
+
+2. Removed variables that are not relevant to what is being predicted, such as indices and timestamps. Of the 60 columns retained after step 1, 53 remain. 
+
+3. Checked for near zero covariates, i.e., those that vary little and are therefore probably of limited or no value for prediction. There were no covariates with zero variance or non-zero variance (nzv). No columns removed.
+
+4. Checked for highly correlated variables (numeric only), above 90 %, and removed these. Of the 53 columns, 46 remain.
+
+```{r explore, echo=TRUE}
+
+# Exploration point 1
+sum(complete.cases(training))
+fracn_empty <- sapply(training, function(x) sum(is.na(x))/19622) # proportion empty or NA across the columns of training
+sum(fracn_empty > 0.95) # returns 100 variables with > 95 % of observations empty or NA
+sum(fracn_empty > 0.97) # returns 100 variable with > 97 % of observations empty or NA
+sum(fracn_empty > 0.98) # returns 0 variable with > 98 % of observations empty or NA
+to_keep <- fracn_empty[which(fracn_empty < 0.95)] # a list of numerics
+to_keep <- as.data.frame(to_keep, header = TRUE)
+
+training_small1 <- training[, colnames(training) %in% rownames(to_keep)]
+
+# Exploration point 2
+to_remove = c('X', 'user_name', 'raw_timestamp_part_1', 'raw_timestamp_part_2', 'cvtd_timestamp', 'new_window', 'num_window')
+training_small2 <- training_small1[, -which(names(training_small1) %in% to_remove)]
+
+# Exploration point 3
+nsv <- nearZeroVar(training_small2, saveMetrics = TRUE)
+nsv
+sum(nsv$nzv == TRUE)
+
+# Exploration point 4
+corrMatrix <- cor(na.omit(training_small2[sapply(training_small2, is.numeric)]))
+dim(corrMatrix)
+to_remove4 = findCorrelation(corrMatrix, cutoff = .90, verbose = TRUE)
+training_small4 = training_small2[,-to_remove4]
+dim(training_small4)
+
+```
+
+## Building the prediction model with cross-validation
+
+A random forest (rf) is a non-linear method that resamples fram the data set samples (bootstrapping) as well as the variables. After growing a large number of trees, the outcomes are averaged to predict the outcome. For this data, the goal is to predict "classe". This approach has the advantage of giving accurate results, but it can be slow and hard to intepret. Cross-validation is important to account for over-fitting.
+
+In searching online for examples of using the correct parameters with the rf method, I found the following resource which appeared to use the same data set: http://bigcomputing.blogspot.ca/2014/10/an-example-of-using-random-forest-in.html
+
+The example showed how to incorporate cross-validation and error estimation directly, and so I used this approach.
+
+With the full training_small4 data set, it seems to take a very long time to run. Partition the data (0.3 of the samples) to speed things along. Note: the allowParallel parameter presumably enables parallel processing to speed up running the model. I was unable to find/install the package "doMC" which I believe is prerequisite for parallel processing, so this parameter is likely not doing anything when I run the model on my machine.
+
+```{r model, echo=TRUE}
+
+library(caret)
+library(ggplot2)
+
+InTrain<-createDataPartition(y=training_small4$classe,p=0.3,list=FALSE)
+training_smaller<-training_small4[InTrain,]
+modFit <- train(classe ~., data = training_smaller, method = "rf", trControl=trainControl(method="cv",number=5), prox = TRUE, allowParallel=TRUE)
+
+print(modFit)
+print(modFit$finalModel)
+
+# Variable importance analysis
+varImp(modFit)
+
+```
+
+From the model information, the prediction produced by this model has a reported accuracy of 0.971 and a kappa of 0.964. The latter is a statistic for expected accuracy for a classifier prediction, and the high value does not in this case tell us much about the performance of the classifier model (https://stats.stackexchange.com/questions/82162/cohens-kappa-in-plain-english).
+
+The calculated OOB (out-of-bag) error for this model is 1.83 %.
+
+## Applying the model to 20 test cases
+
+```{r test_model, echo=TRUE}
+
+pred <- predict(modFit, testing)
+pred
+
+```
